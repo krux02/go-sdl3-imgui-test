@@ -170,13 +170,13 @@ func ImGui_ImplSDL3_ProcessEvent(event *sdl.Event) bool {
 		viewport.SetPlatformRequestResize(true)
 	case sdl.EVENT_WINDOW_CLOSE_REQUESTED:
 		viewport := ImGui_ImplSDL3_GetViewportForWindowID(event.WindowEvent().WindowID)
-		if viewport == nil {
+		if viewport.CData == nil {
 			return false
 		}
 		viewport.SetPlatformRequestClose(true)
 	case sdl.EVENT_WINDOW_MOVED:
 		viewport := ImGui_ImplSDL3_GetViewportForWindowID(event.WindowEvent().WindowID)
-		if viewport == nil {
+		if viewport.CData == nil {
 			return false
 		}
 		viewport.SetPlatformRequestMove(true)

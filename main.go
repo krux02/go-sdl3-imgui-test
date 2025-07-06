@@ -161,10 +161,7 @@ func main() {
 
 		// Start the Dear ImGui frame
 
-		sizex, sizey, err := window.SizeInPixels()
-		if err != nil {
-			panic(err)
-		}
+		sizex, sizey := Must2(window.SizeInPixels())
 
 		gl.Viewport(0, 0, sizex, sizey)
 
