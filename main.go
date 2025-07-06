@@ -104,6 +104,7 @@ func igRenderPlatformWindowsDefault(x, y int32) {
 func main() {
 	// ImGuiIO* io = igGetIO_Nil();
 	//
+	Must0(gl.Init())
 
 	defer binsdl.Load().Unload() // sdl.LoadLibrary(sdl.Path())
 
