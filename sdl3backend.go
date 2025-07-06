@@ -9,22 +9,26 @@ import (
 )
 
 type ImGui_ImplSDL3_Data struct {
-	MouseButtonsDown       uint32
-	MouseWindowID          sdl.WindowID
-	BackendPlatformName    string
-	MouseLastLeaveFrame    int32
-	Window                 *sdl.Window
-	WindowID               sdl.WindowID
-	Renderer               *sdl.Renderer
-	MouseCanUseGlobalState bool
-	MouseCanUseCapture     bool
-	WantUpdateGamepadsList bool
-	MouseCursors           [11]*sdl.Cursor
+	MouseButtonsDown              uint32
+	MouseWindowID                 sdl.WindowID
+	BackendPlatformName           string
+	MouseLastLeaveFrame           int32
+	Window                        *sdl.Window
+	WindowID                      sdl.WindowID
+	Renderer                      *sdl.Renderer
+	MouseCanUseGlobalState        bool
+	MouseCanUseCapture            bool
+	WantUpdateGamepadsList        bool
+	WantUpdateMonitors            bool
+	MouseCanReportHoveredViewport bool
+	MousePendingLeaveFrame        int32
+	MouseCursors                  [11]*sdl.Cursor
+	Time                          uint64
 }
 
 func ImGui_ImplSDL3_GetBackendData() *ImGui_ImplSDL3_Data {
 	if imgui.CurrentContext() != nil {
-		return (*ImGui_ImplSDL3_Data)((unsafe.Pointer)(imgui.CurrentIO().BackendPlatformUserData()))
+		return (*ImGui_ImplSDL3_Data)(unsafe.Pointer(imgui.CurrentIO().BackendPlatformUserData()))
 	}
 	return nil
 }

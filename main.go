@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
-	"github.com/AllenDang/cimgui-go/imgui"
+	im "github.com/AllenDang/cimgui-go/imgui"
 
 	"bytes"
 	_ "embed"
@@ -72,11 +73,130 @@ func ImGui_ImplOpenGL4_NewFrame() {
 	panic("not implemented")
 }
 
-func ImGui_ImplSDL3_NewFrame() {
-	panic("not implemented")
+func ImGui_ImplSDL3_GetWindowSizeAndFramebufferScale(window *sdl.Window) (out_size, out_framebuffer_scale im.Vec2) {
+	w, h := Must2(window.Size())
+
+	if (window.Flags() & sdl.WINDOW_MINIMIZED) != 0 {
+		w = 0
+		h = 0
+	}
+
+	display_w, display_h := Must2(window.SizeInPixels())
+
+	out_size = im.Vec2{float32(w), float32(h)}
+	if w > 0 && h > 0 {
+		out_framebuffer_scale = im.Vec2{float32(display_w) / float32(w), float32(display_h) / float32(h)}
+	} else {
+		out_framebuffer_scale = im.Vec2{1, 1}
+	}
+
+	return
 }
 
-func ImGui_ImplOpenGL4_RenderDrawData(drawData *imgui.DrawData) {
+func ImGui_ImplSDL3_UpdateMonitors() {
+	bd := ImGui_ImplSDL3_GetBackendData()
+	if bd == nil {
+		panic("Context or backend not initialized! Did you call ImGui_ImplSDL3_Init()?")
+	}
+
+	platform_io := im.CurrentIO()
+
+	//platform_io.CData.Ctx.PlatformIO.Monitors.Resize(0)
+	platform_io.Monitors.resize(0) // TODO what do I do here?
+
+	bd.WantUpdateMonitors = false
+
+	displays := Must(sdl.GetDisplays())
+
+	// int display_count;
+	// SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
+	for n, display_id := range displays {
+		// Warning: the validity of monitor DPI information on Windows depends on the application DPI awareness settings, which generally needs to be set in the manifest or at runtime.
+		var monitor im.PlatformMonitor
+		var r *sdl.Rect = Must(display_id.Bounds())
+
+		pos := im.Vec2{float32(r.X), float32(r.Y)}
+		monitor.SetMainPos(pos)
+		monitor.SetWorkPos(pos)
+		size := im.Vec2{float32(r.W), float32(r.H)}
+		monitor.SetMainSize(size)
+		monitor.SetWorkSize(size)
+
+		r = Must(display_id.UsableBounds())
+		if r.W > 0 && r.H > 0 {
+			monitor.SetWorkPos(im.Vec2{float32(r.X), float32(r.Y)})
+			monitor.SetWorkSize(im.Vec2{float32(r.W), float32(r.H)})
+		}
+
+		monitor.SetDpiScale(Must(display_id.ContentScale())) // See https://wiki.libsdl.org/SDL3/README-highdpi for details.
+		monitor.SetPlatformHandle(uintptr(n))
+		if monitor.DpiScale() <= 0 {
+			continue // Some accessibility applications are declaring virtual monitors with a DPI of 0, see #7902.
+		}
+
+		platform_io.Monitors.push_back(monitor) // TODO what do I do here?
+	}
+}
+
+func ImGui_ImplSDL3_NewFrame() {
+
+	bd := ImGui_ImplSDL3_GetBackendData()
+	if bd == nil {
+		panic("Context or backend not initialized! Did you call ImGui_ImplSDL3_Init()?")
+	}
+	io := im.CurrentIO()
+
+	// Setup main viewport size (every frame to accommodate for window resizing)
+	displaySize, displayScale := ImGui_ImplSDL3_GetWindowSizeAndFramebufferScale(bd.Window)
+
+	io.SetDisplaySize(displaySize)
+	io.SetDisplayFramebufferScale(displayScale)
+
+	// Update monitors
+	if runtime.GOOS == "windows" {
+		bd.WantUpdateMonitors = true // Keep polling under Windows to handle changes of work area when resizing task-bar (#8415)
+	}
+
+	if bd.WantUpdateMonitors {
+		ImGui_ImplSDL3_UpdateMonitors()
+	}
+	// Setup time step (we could also use SDL_GetTicksNS() available since SDL3)
+	// (Accept SDL_GetPerformanceCounter() not returning a monotonically increasing value. Happens in VMs and Emscripten, see #6189, #6114, #3644)
+	frequency := sdl.GetPerformanceFrequency()
+	current_time := sdl.GetPerformanceCounter()
+	if current_time <= bd.Time {
+		current_time = bd.Time + 1
+	}
+
+	if bd.Time > 0 {
+		io.SetDeltaTime(float32(current_time-bd.Time) / float32(frequency))
+	} else {
+		io.SetDeltaTime(1 / 60)
+	}
+
+	bd.Time = current_time
+
+	if bd.MousePendingLeaveFrame != 0 && bd.MousePendingLeaveFrame >= im.FrameCount() && bd.MouseButtonsDown == 0 {
+		bd.MouseWindowID = 0
+		bd.MousePendingLeaveFrame = 0
+		io.AddMousePosEvent(-math.MaxFloat32, -math.MaxFloat32)
+	}
+
+	// Our io.AddMouseViewportEvent() calls will only be valid when not capturing.
+	// Technically speaking testing for 'bd.MouseButtonsDown == 0' would be more rigorous, but testing for payload reduces noise and potential side-effects.
+	if bd.MouseCanReportHoveredViewport && im.DragDropPayload() == nil {
+		io.SetBackendFlags(io.BackendFlags() | im.BackendFlagsHasMouseHoveredViewport)
+	} else {
+		io.SetBackendFlags(io.BackendFlags() & ^im.BackendFlagsHasMouseHoveredViewport)
+	}
+
+	ImGui_ImplSDL3_UpdateMouseData()
+	ImGui_ImplSDL3_UpdateMouseCursor()
+	// Update game controllers (if enabled and available)
+	ImGui_ImplSDL3_UpdateGamepads()
+}
+
+func ImGui_ImplOpenGL4_RenderDrawData(drawData *im.DrawData) {
 	panic("not implemented")
 }
 
@@ -85,6 +205,19 @@ func ImGui_ImplOpenGL4_Shutdown() {
 }
 
 func ImGui_ImplSDL3_Shutdown() {
+	panic("not implemented")
+}
+
+func ImGui_ImplSDL3_UpdateMouseData() {
+	panic("not implemented")
+}
+
+func ImGui_ImplSDL3_UpdateMouseCursor() {
+	panic("not implemented")
+}
+
+// Update game controllers (if enabled and available)
+func ImGui_ImplSDL3_UpdateGamepads() {
 	panic("not implemented")
 }
 
@@ -131,20 +264,20 @@ func main() {
 
 	windowID := Must(window.ID())
 
-	imgui.SetCurrentContext(imgui.CreateContext())
+	im.SetCurrentContext(im.CreateContext())
 
-	io := imgui.CurrentIO()
-	io.SetConfigFlags(io.ConfigFlags() | imgui.ConfigFlagsNavEnableKeyboard | imgui.ConfigFlagsNavEnableGamepad)
+	io := im.CurrentIO()
+	io.SetConfigFlags(io.ConfigFlags() | im.ConfigFlagsNavEnableKeyboard | im.ConfigFlagsNavEnableGamepad)
 
-	imgui.StyleColorsDark()
+	im.StyleColorsDark()
 
-	// imgui.WindowViewport()
+	// im.WindowViewport()
 
 	// Main loop
 	var done = false
 	for !done {
 		// Poll and handle events (inputs, window resize, etc.)
-		// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+		// You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear im wants to use your inputs.
 		// - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
 		// - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
 		// Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
@@ -173,14 +306,14 @@ func main() {
 		ImGui_ImplOpenGL4_NewFrame()
 		ImGui_ImplSDL3_NewFrame()
 
-		imgui.NewFrame()
+		im.NewFrame()
 		// rendering
 		Loop()
 
 		// Rendering
-		imgui.Render()
+		im.Render()
 
-		drawData := imgui.CurrentDrawData()
+		drawData := im.CurrentDrawData()
 
 		ImGui_ImplOpenGL4_RenderDrawData(drawData)
 
@@ -210,7 +343,7 @@ func main2() {
 	currentBackend.SetAfterCreateContextHook(AfterCreateContext)
 	currentBackend.SetBeforeDestroyContextHook(BeforeDestroyContext)
 
-	currentBackend.SetBgColor(imgui.NewVec4(0.45, 0.55, 0.6, 1.0))
+	currentBackend.SetBgColor(im.NewVec4(0.45, 0.55, 0.6, 1.0))
 	currentBackend.CreateWindow("Hello from cimgui-go", 1200, 900)
 
 	currentBackend.SetDropCallback(func(p []string) {
@@ -259,7 +392,7 @@ func Initialize() {
 	}
 }
 
-func InputTextCallback(data imgui.InputTextCallbackData) int {
+func InputTextCallback(data im.InputTextCallbackData) int {
 	fmt.Println("got call back")
 	return 0
 }
@@ -279,7 +412,7 @@ func BeforeDestroyContext() {
 }
 
 func Loop() {
-	imgui.ClearSizeCallbackPool()
+	im.ClearSizeCallbackPool()
 	imguizmo.BeginFrame()
 	ShowWidgetsDemo()
 	ShowPictureLoadingDemo()
@@ -290,80 +423,80 @@ func Loop() {
 
 func ShowWidgetsDemo() {
 	if showDemoWindow {
-		imgui.ShowDemoWindowV(&showDemoWindow)
+		im.ShowDemoWindowV(&showDemoWindow)
 	}
 
-	imgui.SetNextWindowSizeV(imgui.NewVec2(300, 300), imgui.CondOnce)
+	im.SetNextWindowSizeV(im.NewVec2(300, 300), im.CondOnce)
 
-	imgui.SetNextWindowSizeConstraintsV(imgui.Vec2{300, 300}, imgui.Vec2{500, 500}, func(data *imgui.SizeCallbackData) {
+	im.SetNextWindowSizeConstraintsV(im.Vec2{300, 300}, im.Vec2{500, 500}, func(data *im.SizeCallbackData) {
 	}, 0)
 
-	imgui.Begin("Window 1")
-	if imgui.ButtonV("Click Me", imgui.NewVec2(80, 20)) {
+	im.Begin("Window 1")
+	if im.ButtonV("Click Me", im.NewVec2(80, 20)) {
 		fmt.Println("Button clicked")
 	}
-	imgui.TextUnformatted("Unformatted text")
-	imgui.Checkbox("Show demo window", &showDemoWindow)
-	if imgui.BeginCombo("Combo", "Combo preview") {
-		imgui.SelectableBoolPtr("Item 1", &selected)
-		imgui.SelectableBool("Item 2")
-		imgui.SelectableBool("Item 3")
-		imgui.EndCombo()
+	im.TextUnformatted("Unformatted text")
+	im.Checkbox("Show demo window", &showDemoWindow)
+	if im.BeginCombo("Combo", "Combo preview") {
+		im.SelectableBoolPtr("Item 1", &selected)
+		im.SelectableBool("Item 2")
+		im.SelectableBool("Item 3")
+		im.EndCombo()
 	}
 
-	if imgui.RadioButtonBool("Radio button1", selected) {
+	if im.RadioButtonBool("Radio button1", selected) {
 		selected = true
 	}
 
-	imgui.SameLine()
+	im.SameLine()
 
-	if imgui.RadioButtonBool("Radio button2", !selected) {
+	if im.RadioButtonBool("Radio button2", !selected) {
 		selected = false
 	}
 
-	imgui.InputTextWithHint("Name", "write your name here", &content, 0, InputTextCallback)
-	imgui.Text(content)
-	imgui.SliderInt("Slider int", &value3, 0, 100)
-	imgui.DragInt("Drag int", &value1)
-	imgui.DragInt2("Drag int2", &values)
+	im.InputTextWithHint("Name", "write your name here", &content, 0, InputTextCallback)
+	im.Text(content)
+	im.SliderInt("Slider int", &value3, 0, 100)
+	im.DragInt("Drag int", &value1)
+	im.DragInt2("Drag int2", &values)
 	value1 = values[0]
-	imgui.ColorEdit4("Color Edit3", &color4)
-	imgui.End()
+	im.ColorEdit4("Color Edit3", &color4)
+	im.End()
 }
 
 func ShowPictureLoadingDemo() {
 	// demo of showing a picture
-	basePos := imgui.MainViewport().Pos()
-	imgui.SetNextWindowPosV(imgui.NewVec2(basePos.X+60, 600), imgui.CondOnce, imgui.NewVec2(0, 0))
-	imgui.Begin("Image")
-	imgui.Text(fmt.Sprintf("pointer = %v", texture.ID))
-	imgui.ImageWithBgV(texture.ID, imgui.NewVec2(float32(texture.Width), float32(texture.Height)), imgui.NewVec2(0, 0), imgui.NewVec2(1, 1), imgui.NewVec4(0, 0, 0, 0), imgui.NewVec4(1, 1, 1, 1))
-	imgui.End()
+	basePos := im.MainViewport().Pos()
+	im.SetNextWindowPosV(im.NewVec2(basePos.X+60, 600), im.CondOnce, im.NewVec2(0, 0))
+	im.Begin("Image")
+	im.Text(fmt.Sprintf("pointer = %v", texture.ID))
+	im.ImageWithBgV(texture.ID, im.NewVec2(float32(texture.Width), float32(texture.Height)), im.NewVec2(0, 0), im.NewVec2(1, 1), im.NewVec4(0, 0, 0, 0), im.NewVec4(1, 1, 1, 1))
+	im.End()
 }
 
 func ShowImPlotDemo() {
-	basePos := imgui.MainViewport().Pos()
-	imgui.SetNextWindowPosV(imgui.NewVec2(basePos.X+400, basePos.Y+60), imgui.CondOnce, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(500, 300), imgui.CondOnce)
-	imgui.Begin("Plot window")
-	if implot.BeginPlotV("Plot", imgui.NewVec2(-1, -1), 0) {
+	basePos := im.MainViewport().Pos()
+	im.SetNextWindowPosV(im.NewVec2(basePos.X+400, basePos.Y+60), im.CondOnce, im.NewVec2(0, 0))
+	im.SetNextWindowSizeV(im.NewVec2(500, 300), im.CondOnce)
+	im.Begin("Plot window")
+	if implot.BeginPlotV("Plot", im.NewVec2(-1, -1), 0) {
 		implot.PlotBarsS64PtrInt("Bar", utils.SliceToPtr(barValues), int32(len(barValues)))
 		implot.PlotLineS64PtrInt("Line", utils.SliceToPtr(barValues), int32(len(barValues)))
 		implot.EndPlot()
 	}
-	imgui.End()
+	im.End()
 }
 
 func ShowCTEDemo() {
-	basePos := imgui.MainViewport().Pos()
-	imgui.SetNextWindowPosV(imgui.NewVec2(basePos.X+800, basePos.Y+260), imgui.CondOnce, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(250, 400), imgui.CondOnce)
-	imgui.Begin("Color Text Edit")
+	basePos := im.MainViewport().Pos()
+	im.SetNextWindowPosV(im.NewVec2(basePos.X+800, basePos.Y+260), im.CondOnce, im.NewVec2(0, 0))
+	im.SetNextWindowSizeV(im.NewVec2(250, 400), im.CondOnce)
+	im.Begin("Color Text Edit")
 
 	if textEditor.Render("Color Text Edit") {
 	}
 
-	imgui.End()
+	im.End()
 }
 
 func Image() *image.RGBA {
